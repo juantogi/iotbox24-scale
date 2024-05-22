@@ -83,8 +83,50 @@ ADAMEquipmentProtocol = ScaleProtocol(
 
 # Ensures compatibility with older versions of Odoo
 class ScaleReadOldRoute(http.Controller):
+
+    @staticmethod
+    def _get_custom_scale():
+        PORT_USB0 = '/dev/ttyUSB0'
+        PORT_USB1 = '/dev/ttyUSB1'
+        try:
+            if ( os.path.exists(PORT_USB0)):
+                return serial.Serial(PORT_USB0, 9600)
+            elif ( os.path.exists(PORT_USB1)):
+                return serial.Serial(PORT_USB1, 9600)
+            else:
+                print ('No ha conectado el cable USB - FTDI a la Balanza o está apagada')
+                return False
+        except serial.SerialException:
+            print ("ERROR - SerialException el USB - FTDI a la Balanza")
+            return False
+        
+    @staticmethod
+    def _get_weight(serial):
+        s4 = "0.00"
+        while True:
+            try:
+                scale = serial.read(100)
+                s2 = scale.decode("utf-8") ##Convertimos de Bytes a String
+                inicio = s2.find("\x02")  # guarda posicion de x02 
+                fin = s2.find("\r")  # guarda posicion de r
+                s3 = s2[inicio+3:fin] # extraemos la medida
+                s4 = s3.strip() # le quitamos los espacios en blanco
+                if (fin > inicio):
+                    break  
+
+            except Exception:
+                print ("Excepcion Controlada")
+
+        return float(s4)
+
     @http.route('/hw_proxy/scale_read', type='json', auth='none', cors='*')
     def scale_read(self):
+        scale = self._get_custom_scale()
+        if scale:
+            new_weight = self._get_weight(scale)
+            return {
+                'weight': new_weight
+            }
         if ACTIVE_SCALE:
             return {'weight': ACTIVE_SCALE._scale_read_old_route()}
         return None
@@ -176,61 +218,21 @@ class ScaleDriver(SerialDriver):
             else:
                 answer.append(bytes(char))
         return b''.join(answer)
-
-    def _get_custom_scale():
-        PORT_USB0 = '/dev/ttyUSB0'
-        PORT_USB1 = '/dev/ttyUSB1'
-        try:
-            if ( os.path.exists(PORT_USB0)):
-                return serial.Serial(PORT_USB0, 9600)
-            elif ( os.path.exists(PORT_USB1)):
-                return serial.Serial(PORT_USB1, 9600)
-            else:
-                print ('No ha conectado el cable USB - FTDI a la Balanza o está apagada')
-                return False
-        except serial.SerialException:
-            print ("ERROR - SerialException el USB - FTDI a la Balanza")
-            return False
-        
-
-    def _get_weight(serial):
-        s4 = "0.00"
-        while True:
-            try:
-                scale = serial.read(100)
-                s2 = scale.decode("utf-8") ##Convertimos de Bytes a String
-                inicio = s2.find("\x02")  # guarda posicion de x02 
-                fin = s2.find("\r")  # guarda posicion de r
-                s3 = s2[inicio+3:fin] # extraemos la medida
-                s4 = s3.strip() # le quitamos los espacios en blanco
-                if (fin > inicio):
-                    break  
-
-            except Exception:
-                print ("Excepcion Controlada")
-
-        return float(s4)
+    
     
     def _read_weight(self):
         """Asks for a new weight from the scale, checks if it is valid and, if it is, makes it the current value."""
 
-        scale = self._get_custom_scale()
-        if scale:
-            new_weight = self._get_weight(scale)
+        protocol = self._protocol
+        self._connection.write(protocol.measureCommand + protocol.commandTerminator)
+        answer = self._get_raw_response(self._connection)
+        match = re.search(self._protocol.measureRegexp, answer)
+        if match:
             self.data = {
-                'value': new_weight,
+                'value': float(match.group(1)),
                 'status': self._status
             }
-        else:
-            protocol = self._protocol
-            self._connection.write(protocol.measureCommand + protocol.commandTerminator)
-            answer = self._get_raw_response(self._connection)
-            match = re.search(self._protocol.measureRegexp, answer)
-            if match:
-                self.data = {
-                    'value': float(match.group(1)),
-                    'status': self._status
-                }
+            
 
     # Ensures compatibility with older versions of Odoo
     def _scale_read_old_route(self):
